@@ -1,0 +1,12 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+  </Configurations>
+  <Folder Name="/Solution Items/">
+    <File Path=".editorconfig" />
+  </Folder>
+  <Project Path="RfidRastroVerde/RfidRastroVerde.csproj" Id="ef18dc7b-9bba-4276-9e8d-75b0522bb267">
+    <Platform Solution="*|x64" Project="x64" />
+  </Project>
+</Solution>
