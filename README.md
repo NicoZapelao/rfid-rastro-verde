@@ -115,6 +115,7 @@ O sistema permite exportar todas as informações coletadas para um arquivo XML 
     </Reader>
   </Readers>
 </RfidReadReport>
+```
 
 ---
 
