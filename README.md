@@ -30,25 +30,27 @@ Projetado para ambientes **industriais, logísticos e de rastreabilidade**, o si
 
 O projeto é organizado em camadas bem definidas, facilitando manutenção, expansão e uso em diferentes cenários:
 
-RfidRastroVerde
-├── Driver_Proj
-│ ├── RfidReaderDriver.cs # Comunicação direta com o leitor RFID
-│ └── RfidReaderManager.cs # Gerenciamento multi-leitor + lógica global
+```text
+RfidRastroVerde/
+├─ Driver_Proj/
+│  ├─ RfidReaderDriver.cs      # Comunicação direta com o leitor RFID (HID/DLL)
+│  └─ RfidReaderManager.cs     # Orquestra multi-leitor + dedupe global + ciclo
 │
-├── Models_Proj
-│ ├── TagRead.cs # Modelo interno de leitura RFID
-│ └── TagRow.cs # Modelo para visualização no grid
+├─ Models_Proj/
+│  ├─ TagRead.cs               # Modelo interno da leitura (evento)
+│  └─ TagRow.cs                # Modelo de visualização no grid (UI)
 │
-├── Api
-│ ├── ApiClient.cs # Cliente HTTP (REST)
-│ ├── ApiQueue.cs # Fila assíncrona de envio
-│ ├── ApiConfig.cs # Configurações da API
-│ └── TagReadDto.cs # DTO para envio externo
+├─ Api/                        # (Opcional) Integração REST
+│  ├─ ApiClient.cs             # Cliente HTTP/REST
+│  ├─ ApiQueue.cs              # Fila assíncrona (não bloqueia leitura/UI)
+│  ├─ ApiConfig.cs             # Configurações (BaseUrl, DeviceId, Enabled, etc.)
+│  └─ TagReadDto.cs            # DTO para envio via API
 │
-├── Cli
-│ └── CliRunner.cs # Execução via linha de comando
+├─ Cli/
+│  └─ CliRunner.cs             # Execução headless (linha de comando)
 │
-└── Form1.cs # Interface gráfica (WinForms)
+└─ Form1.cs                    # WinForms: UI, grid, logs e exportação
+```
 
 ---
 
