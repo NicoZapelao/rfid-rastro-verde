@@ -50,7 +50,6 @@ RfidRastroVerde
 │
 └── Form1.cs # Interface gráfica (WinForms)
 
-
 ---
 
 ## 🖥️ Interface Gráfica (WinForms)
@@ -122,9 +121,10 @@ O sistema permite exportar todas as informações coletadas para um arquivo XML 
 ## 💻 Modo CLI (Linha de Comando)
 
 O projeto também pode ser executado sem interface gráfica, ideal para automação, testes ou integração em pipelines.
-Exemplo de uso
 
-RfidRastroVerde.exe 100 80
+Exemplo de uso:
+
+    RfidRastroVerde.exe 100 80
 
 Parâmetros:
 
@@ -132,7 +132,7 @@ Parâmetros:
 
     80 → Intervalo de polling em milissegundos
 
-Funcionalidades no CLI
+Funcionalidades no CLI:
 
     Detecção automática de leitores conectados
 
@@ -149,7 +149,7 @@ Funcionalidades no CLI
 ## 🌐 Integração com API (Opcional)
 
 O sistema suporta envio assíncrono das leituras para uma API REST.
-Como funciona
+Como funciona:
 
     Cada tag única gera um DTO (TagReadDto)
 
@@ -159,13 +159,13 @@ Como funciona
 
     A API pode ser habilitada ou desabilitada por configuração
 
-Exemplo de configuração
+    Exemplo de configuração:
 
-{
-  "BaseUrl": "https://api.exemplo.com",
-  "DeviceId": "RFID-01",
-  "Enabled": true
-}
+    {
+      "BaseUrl": "https://api.exemplo.com",
+      "DeviceId": "RFID-01",
+      "Enabled": true
+    }
 
     Se BaseUrl estiver vazia ou Enabled = false, a API é automaticamente desativada.
 
@@ -211,6 +211,7 @@ Exemplo de configuração
 ## 👤 Autor
 
 Nicolas Zapelão
+
 Projeto: RfidRastroVerde
 
 ---
