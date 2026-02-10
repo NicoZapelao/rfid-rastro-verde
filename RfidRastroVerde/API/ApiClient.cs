@@ -1,9 +1,9 @@
-﻿using RfidRastroVerde.API;
+﻿using Newtonsoft.Json;
+using RfidRastroVerde.API;
 using System;
 using System.IO;
 using System.Net;
 using System.Net.Http;
-using System.Runtime.Serialization.Json;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -20,7 +20,7 @@ namespace RfidRastroVerde.Api
             _cfg = cfg ?? throw new ArgumentNullException(nameof(cfg));
 
             // força TLS moderno em alguns ambientes .NET Framework
-            try { ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072; } catch { }
+            try { ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12; } catch { }
 
             _http = new HttpClient
             {
@@ -48,14 +48,7 @@ namespace RfidRastroVerde.Api
         }
 
         private static string SerializeJson<T>(T obj)
-        {
-            var ser = new DataContractJsonSerializer(typeof(T));
-            using (var ms = new MemoryStream())
-            {
-                ser.WriteObject(ms, obj);
-                return Encoding.UTF8.GetString(ms.ToArray());
-            }
-        }
+            => JsonConvert.SerializeObject(obj);
 
         public void Dispose()
         {

@@ -85,6 +85,7 @@
       <DependentUpon>Form1.cs</DependentUpon>
     </Compile>
     <Compile Include="Models_Proj\TagRead.cs" />
+    <Compile Include="Models_Proj\TrayModels.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="SDK_Fabricante\SWHidApi.cs" />

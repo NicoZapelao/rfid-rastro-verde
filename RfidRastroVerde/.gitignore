@@ -3,12 +3,13 @@
 *.user
 *.suo
 *.userosscache
-*.sln.docstates
+*.sln.docstates,
+*.tmp
+*.trace
 
 # Build
 bin/
 obj/
-[Bb]uild/
 
 # Logs
 *.log

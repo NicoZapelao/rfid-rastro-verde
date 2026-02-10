@@ -10,14 +10,14 @@ namespace RfidRastroVerde.Driver_Proj
     {
         private const byte DEV = 0xFF;
 
-        // 🔒 LOCK GLOBAL: protege TODAS as chamadas à DLL (muito provável ela não ser thread-safe)
-        internal static readonly object HidLock = new object();
+        // LOCK GLOBAL: protege TODAS as chamadas à DLL
+        public static readonly object HidLock = new object();
 
-        private bool _isOpen;
-        private bool _isReading;
+        private volatile bool _isOpen;
+        private volatile bool _isReading;
 
         private readonly int _pollIntervalMs;
-        private Timer _pollTimer; // ✅ timer de background (não depende da UI)
+        private Timer _pollTimer; // timer de background (não depende da UI)
         private readonly byte[] _tagBuf = new byte[64 * 1024];
 
         public bool IsOpen => _isOpen;
@@ -105,6 +105,15 @@ namespace RfidRastroVerde.Driver_Proj
             return true;
         }
 
+        private int _inTick = 0;
+
+        public void WaitIdle(int timeoutMs)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            while (System.Threading.Volatile.Read(ref _inTick) != 0 && sw.ElapsedMilliseconds < timeoutMs)
+                System.Threading.Thread.Sleep(5);
+        }
+
         public bool StartReading(bool clearBufferBeforeStart)
         {
             if (!_isOpen)
@@ -113,17 +122,13 @@ namespace RfidRastroVerde.Driver_Proj
                 return false;
             }
 
-            if (_isReading) return true;
+            // se tiver qualquer resquício, limpa
+            StopReading();
 
-            // opcional (mas CUIDADO: pode ser global na DLL)
+            // opcional: limpeza do buffer (global) controlada pelo Manager
             if (clearBufferBeforeStart)
             {
-                try
-                {
-                    lock (HidLock)
-                        SWHidApi.SWHid_ClearTagBuf();
-                }
-                catch { }
+                try { lock (HidLock) SWHidApi.SWHid_ClearTagBuf(); } catch { }
             }
 
             bool ok;
@@ -139,23 +144,30 @@ namespace RfidRastroVerde.Driver_Proj
             _isReading = true;
             EmitLog("StartRead OK.\r\n");
 
-            // ✅ timer em background
+            // timer em background
             _pollTimer = new Timer(_ => PollOnce(), null, 0, _pollIntervalMs);
-
             return true;
         }
 
         public void StopReading()
         {
-            _pollTimer?.Dispose();
+            var timer = _pollTimer;
             _pollTimer = null;
+
+            if (timer != null)
+            {
+                try { timer.Change(Timeout.Infinite, Timeout.Infinite); } catch { }
+                try { timer.Dispose(); } catch { }
+            }
+
+            WaitIdle(300); // espera callback em voo terminar (evita corrida com GetTagBuf)
 
             if (!_isReading) return;
 
             try
             {
                 lock (HidLock)
-                    SWHidApi.SWHid_StopRead(DEV);
+                    try { SWHidApi.SWHid_StopRead(DEV); } catch { }
             }
             catch { }
 
@@ -192,22 +204,26 @@ namespace RfidRastroVerde.Driver_Proj
         private void PollOnce()
         {
             if (!_isOpen || !_isReading) return;
-
-            int len, tagCount;
-
+        
+            Interlocked.Increment(ref _inTick);
             try
             {
+                int len, tagCount;
+
                 lock (HidLock)
                     SWHidApi.SWHid_GetTagBuf(_tagBuf, out len, out tagCount);
+
+                if (tagCount > 0 && len > 0)
+                    ParseTags(_tagBuf, len, tagCount);
             }
             catch (Exception ex)
             {
                 EmitLog("Erro GetTagBuf: " + ex.Message + "\r\n");
-                return;
             }
-
-            if (tagCount > 0 && len > 0)
-                ParseTags(_tagBuf, len, tagCount);
+            finally
+            {
+                Interlocked.Decrement(ref _inTick);
+            }            
         }
 
         private void ParseTags(byte[] buf, int totalLen, int tagCount)
