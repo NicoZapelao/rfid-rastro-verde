@@ -63,9 +63,15 @@ namespace RfidRastroVerde
         private DateTime _lastTrayScanAt = DateTime.MinValue;
         private static readonly TimeSpan TrayScanDebounce = TimeSpan.FromMilliseconds(350);
 
+        private const int TargetUniqueTags = 165;
+        private static readonly TimeSpan HardCap = TimeSpan.FromSeconds(30);
+
+        // opcional para teste: desligar log por tag
+        private const bool PerfMode = true;
+
         // Idle: encerra após 20s sem TAG
         private System.Threading.Timer _idleTimer;
-        private static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(20);
+        private static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(3);
         private volatile int _lastTagTick = 0; // Environment.TickCount
 
         // scan novo invalida sessões antigas
@@ -289,7 +295,7 @@ namespace RfidRastroVerde
         // =========================================================
         private void btnOpen_Click(object sender, EventArgs e)
         {
-            _mgr.OpenAllDetected(pollIntervalMs: 80);
+            _mgr.OpenAllDetected(pollIntervalMs: 20);
 
             if (_mgr.Drivers.Count > 0)
             {
@@ -379,10 +385,10 @@ namespace RfidRastroVerde
 
             ResetUiForNewCycle("BANDEJA " + trayEpc);
             Log($"[TRAY] Bandeja escaneada: {trayEpc}\r\n");
-            Log("[TRAY] Iniciando leitura... (finaliza por 20s sem tag ou nova bandeja)\r\n");
+            Log("[TRAY] Iniciando leitura... (finaliza por 3s sem tag, meta 165 ou 30s hard cap)\r\n");
 
             _mgr.ResetGlobal();
-            _mgr.StartGlobalFresh(999999);
+            _mgr.StartGlobalFresh(165);
 
             RefreshUiState();
 
@@ -404,6 +410,20 @@ namespace RfidRastroVerde
 
             int sinceLast = Environment.TickCount - _lastTagTick;
             if (sinceLast < 0) sinceLast = int.MaxValue;
+            
+            // teto de 30s por sessão
+            if (DateTime.Now - session.StartedAt >= HardCap)
+            {
+                try
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        EndCurrentTraySession(TrayEndReason.HardCap);
+                    }));
+                }
+                catch { }
+                return;
+            }
 
             if (sinceLast >= (int)IdleTimeout.TotalMilliseconds)
             {
@@ -543,6 +563,19 @@ namespace RfidRastroVerde
                     row.LastRssiHex = tag.RssiHex ?? "";
 
                     accepted = true;
+
+                    int uniqueNow = currenteSession.UniqueTagsCount;
+                    if (uniqueNow >= TargetUniqueTags)
+                    {
+                        try
+                        {
+                            BeginInvoke(new Action(() =>
+                            {
+                                EndCurrentTraySession(TrayEndReason.TargetReached);
+                            }))
+                        }
+                        catch { }
+                    }
                 }
             }
 
@@ -553,10 +586,15 @@ namespace RfidRastroVerde
             }
             if (!accepted) return;
 
-            Log("[R" + tag.ReaderIndex + "] " + tag.ToString() + " SN=" + (tag.ReaderSn ?? "") + "\r\n");
+            if (!PerfMode)
+            {
+                Log("[R" + tag.ReaderIndex + "] " + tag.ToString() + " SN=" + (tag.ReaderSn ?? "") + "\r\n");
 
-            if (IsHandleCreated)
-                BeginInvoke(new Action(() => UpsertGridRow(tag)));
+                if (IsHandleCreated)
+                {
+                    BeginInvoke(new Action(() => UpsertGridRow(tag)));
+                }
+            }
 
             // API tag-a-tag
             if (_apiQueue != null && _apiCfg != null)
