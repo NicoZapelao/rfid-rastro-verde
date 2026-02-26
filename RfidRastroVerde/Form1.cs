@@ -473,32 +473,33 @@ _uiFlushTimer.Start();
         {
             try
             {
-                
-// Monta snapshot completo (1 request por bandeja)
-var snapshot = TraySnapshotDto.FromSession(session, _apiCfg?.DeviceId);
 
-// log enxuto (JSON completo pode ser grande e matar desempenho)
-Log($"[TRAY] Snapshot pronto: Tray={snapshot.TrayEpc} | Itens={snapshot.UniqueItemCount} | Incomplete={snapshot.Incomplete} | Reason={snapshot.EndReason}\r\n");
+                // Monta snapshot completo (1 request por bandeja)
+                var snapshot = TraySnapshotDto.FromSession(session, _apiCfg?.DeviceId);
 
-// Salva JSON em disco (útil para auditoria e reenvio)
-try
-{
-    var jsonCompact = JsonConvert.SerializeObject(snapshot);
-    SaveSnapshotLocal(snapshot.SnapshotId, jsonCompact);
-}
-catch { /* não falhar por causa de log/arquivo */ }
+                // log enxuto (JSON completo pode ser grande e matar desempenho)
+                Log($"[TRAY] Snapshot pronto: Tray={snapshot.TrayEpc} | Itens={snapshot.UniqueItemCount} | Incomplete={snapshot.Incomplete} | Reason={snapshot.EndReason}\r\n");
 
-// API: envia snapshot na fila (assíncrono)
-if (_apiQueue != null && _apiCfg != null && _apiCfg.Enabled)
-{
-    _apiQueue.EnqueueSnapshot(snapshot);
-}
-await Task.CompletedTask;
+                // Salva JSON em disco (útil para auditoria e reenvio)
+                try
+                {
+                    var jsonCompact = JsonConvert.SerializeObject(snapshot);
+                    SaveSnapshotLocal(snapshot.SnapshotId, jsonCompact);
+                }
+                catch { /* não falhar por causa de log/arquivo */ }
+
+                // API: envia snapshot na fila (assíncrono)
+                if (_apiQueue != null && _apiCfg != null && _apiCfg.Enabled)
+                {
+                    _apiQueue.EnqueueSnapshot(snapshot);
+                }
+                await Task.CompletedTask;
             }
             catch (Exception ex)
             {
                 Log("[TRAY] Erro ProcessTrayResultAsync: " + ex.Message + "\r\n");
             }
+        }
         
 
 private void SaveSnapshotLocal(string snapshotId, string json)
@@ -508,7 +509,6 @@ private void SaveSnapshotLocal(string snapshotId, string json)
     Directory.CreateDirectory(dir);
     var file = Path.Combine(dir, $"{DateTime.Now:yyyyMMdd_HHmmss}_{snapshotId}.json");
     File.WriteAllText(file, json, Encoding.UTF8);
-}
 }
 
         // =========================================================
