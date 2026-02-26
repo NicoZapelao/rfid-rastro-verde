@@ -44,7 +44,19 @@ namespace RfidRastroVerde
         private readonly Dictionary<string, TagRow> _gridIndex =
             new Dictionary<string, TagRow>(StringComparer.OrdinalIgnoreCase);
 
-        private int _lastTotalUniqueLogged = 0;
+        
+
+// -----------------------------
+// UI BATCH: evita travar WinForms com update por tag
+// -----------------------------
+private readonly ConcurrentQueue<TagRead> _uiTagQueue = new ConcurrentQueue<TagRead>();
+private readonly System.Windows.Forms.Timer _uiFlushTimer = new System.Windows.Forms.Timer();
+private const int UiFlushIntervalMs = 250;      // 4x por segundo
+private const int UiMaxTagsPerFlush = 800;      // limite por flush
+private const int ProgressLogEveryTags = 25;    // log de progresso a cada N tags únicas
+private volatile int _lastProgressLogged = 0;
+private const bool VerbosePerTagLog = false;    // ligar só para depuração pesada
+private int _lastTotalUniqueLogged = 0;
 
         // -----------------------------
         // API
@@ -63,15 +75,9 @@ namespace RfidRastroVerde
         private DateTime _lastTrayScanAt = DateTime.MinValue;
         private static readonly TimeSpan TrayScanDebounce = TimeSpan.FromMilliseconds(350);
 
-        private const int TargetUniqueTags = 165;
-        private static readonly TimeSpan HardCap = TimeSpan.FromSeconds(30);
-
-        // opcional para teste: desligar log por tag
-        private const bool PerfMode = true;
-
         // Idle: encerra após 20s sem TAG
         private System.Threading.Timer _idleTimer;
-        private static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(3);
+        private static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(20); // TODO: tornar configurável por cliente/zona
         private volatile int _lastTagTick = 0; // Environment.TickCount
 
         // scan novo invalida sessões antigas
@@ -85,6 +91,12 @@ namespace RfidRastroVerde
             InitLogSystem();
             InitGrid();
             InitExportMenu();
+
+// UI flush (batch)
+_uiFlushTimer.Interval = UiFlushIntervalMs;
+_uiFlushTimer.Tick += (s, e) => FlushUiTagsToGrid();
+_uiFlushTimer.Start();
+
 
             _mgr.Log += DriverLog;
             _mgr.TagUnique += DriverTag;
@@ -385,7 +397,7 @@ namespace RfidRastroVerde
 
             ResetUiForNewCycle("BANDEJA " + trayEpc);
             Log($"[TRAY] Bandeja escaneada: {trayEpc}\r\n");
-            Log("[TRAY] Iniciando leitura... (finaliza por 3s sem tag, meta 165 ou 30s hard cap)\r\n");
+            Log("[TRAY] Iniciando leitura... (finaliza por 20s sem tag ou nova bandeja)\r\n");
 
             _mgr.ResetGlobal();
             _mgr.StartGlobalFresh(165);
@@ -410,20 +422,6 @@ namespace RfidRastroVerde
 
             int sinceLast = Environment.TickCount - _lastTagTick;
             if (sinceLast < 0) sinceLast = int.MaxValue;
-            
-            // teto de 30s por sessão
-            if (DateTime.Now - session.StartedAt >= HardCap)
-            {
-                try
-                {
-                    BeginInvoke(new Action(() =>
-                    {
-                        EndCurrentTraySession(TrayEndReason.HardCap);
-                    }));
-                }
-                catch { }
-                return;
-            }
 
             if (sinceLast >= (int)IdleTimeout.TotalMilliseconds)
             {
@@ -475,48 +473,43 @@ namespace RfidRastroVerde
         {
             try
             {
-                var payload = new
-                {
-                    trayEpc = session.TrayEpc,
-                    startedAt = session.StartedAt.ToString("yyyy-MM-ddTHH:mm:ss.fff"),
-                    lastTagAt = session.LastTagAt.ToString("yyyy-MM-ddTHH:mm:ss.fff"),
-                    endedAt = session.EndedAt?.ToString("yyyy-MM-ddTHH:mm:ss.fff"),
-                    endReason = session.EndReason?.ToString(),
-                    incomplete = session.Incomplete,
-                    uniqueItemCount = session.UniqueTagsCount,
-                    items = session.Tags.Values
-                        .OrderByDescending(t => t.SeenCount)
-                        .Select(t => new
-                        {
-                            epc = t.Epc,
-                            seenCount = t.SeenCount,
-                            firstSeen = t.FirstSeen.ToString("yyyy-MM-ddTHH:mm:ss.fff"),
-                            lastSeen = t.LastSeen.ToString("yyyy-MM-ddTHH:mm:ss.fff"),
-                            lastReaderIndex = t.LastReaderIndex,
-                            lastReaderSn = t.LastReaderSn,
-                            lastAntenna = t.LastAntenna,
-                            lastRssiHex = t.LastRssiHex
-                        })
-                        .ToList()
-                };
+                
+// Monta snapshot completo (1 request por bandeja)
+var snapshot = TraySnapshotDto.FromSession(session, _apiCfg?.DeviceId);
 
-                string json = JsonConvert.SerializeObject(payload, Formatting.Indented);
-                Log("[TRAY] Payload pronto (JSON):\r\n" + json + "\r\n");
+// log enxuto (JSON completo pode ser grande e matar desempenho)
+Log($"[TRAY] Snapshot pronto: Tray={snapshot.TrayEpc} | Itens={snapshot.UniqueItemCount} | Incomplete={snapshot.Incomplete} | Reason={snapshot.EndReason}\r\n");
 
-                // API
-                if (_apiCfg != null && _apiCfg.Enabled)
-                {
-                    //await _apiClient.PostTraySnapshotAsync(payload);
-                    //await _apiQueue.EnqueueTrayAsync(payload);
-                }
+// Salva JSON em disco (útil para auditoria e reenvio)
+try
+{
+    var jsonCompact = JsonConvert.SerializeObject(snapshot);
+    SaveSnapshotLocal(snapshot.SnapshotId, jsonCompact);
+}
+catch { /* não falhar por causa de log/arquivo */ }
 
-                await Task.CompletedTask;
+// API: envia snapshot na fila (assíncrono)
+if (_apiQueue != null && _apiCfg != null && _apiCfg.Enabled)
+{
+    _apiQueue.EnqueueSnapshot(snapshot);
+}
+await Task.CompletedTask;
             }
             catch (Exception ex)
             {
                 Log("[TRAY] Erro ProcessTrayResultAsync: " + ex.Message + "\r\n");
             }
-        }
+        
+
+private void SaveSnapshotLocal(string snapshotId, string json)
+{
+    // grava em %AppData%\RfidRastroVerde\snapshots\
+    var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "RfidRastroVerde", "snapshots");
+    Directory.CreateDirectory(dir);
+    var file = Path.Combine(dir, $"{DateTime.Now:yyyyMMdd_HHmmss}_{snapshotId}.json");
+    File.WriteAllText(file, json, Encoding.UTF8);
+}
+}
 
         // =========================================================
         // DRIVER EVENTS (TagUnique do Manager)
@@ -563,19 +556,6 @@ namespace RfidRastroVerde
                     row.LastRssiHex = tag.RssiHex ?? "";
 
                     accepted = true;
-
-                    int uniqueNow = currenteSession.UniqueTagsCount;
-                    if (uniqueNow >= TargetUniqueTags)
-                    {
-                        try
-                        {
-                            BeginInvoke(new Action(() =>
-                            {
-                                EndCurrentTraySession(TrayEndReason.TargetReached);
-                            }))
-                        }
-                        catch { }
-                    }
                 }
             }
 
@@ -586,18 +566,28 @@ namespace RfidRastroVerde
             }
             if (!accepted) return;
 
-            if (!PerfMode)
-            {
-                Log("[R" + tag.ReaderIndex + "] " + tag.ToString() + " SN=" + (tag.ReaderSn ?? "") + "\r\n");
+            
+// UI: não atualiza grid/log a cada tag (isso derruba performance). Faz batch no timer.
+_uiTagQueue.Enqueue(tag);
 
-                if (IsHandleCreated)
-                {
-                    BeginInvoke(new Action(() => UpsertGridRow(tag)));
-                }
-            }
+// log detalhado por tag só em modo debug pesado
+if (VerbosePerTagLog)
+    Log("[R" + tag.ReaderIndex + "] " + tag.ToString() + " SN=" + (tag.ReaderSn ?? "") + "\r\n");
 
-            // API tag-a-tag
-            if (_apiQueue != null && _apiCfg != null)
+// log de progresso (a cada N tags únicas na sessão)
+int uniqueNow;
+lock (_trayLock)
+{
+    uniqueNow = _currentSession != null ? _currentSession.UniqueTagsCount : 0;
+}
+if (uniqueNow > 0 && uniqueNow - _lastProgressLogged >= ProgressLogEveryTags)
+{
+    _lastProgressLogged = uniqueNow;
+    Log($"[TRAY] Progresso: {uniqueNow} tags únicas\r\n");
+}
+
+            // API tag-a-tag (opcional; pode atrapalhar desempenho em rede)
+            if (_apiQueue != null && _apiCfg != null && _apiCfg.SendTagEvents)
             {
                 _apiQueue.Enqueue(new TagReadDto
                 {
@@ -612,7 +602,28 @@ namespace RfidRastroVerde
             }
         }
 
-        // =========================================================
+        
+
+// =========================================================
+// UI BATCH FLUSH
+// =========================================================
+private void FlushUiTagsToGrid()
+{
+    if (_uiTagQueue.IsEmpty) return;
+    if (!IsHandleCreated) return;
+
+    // Faz 1 BeginInvoke por flush (em vez de 1 por tag)
+    BeginInvoke(new Action(() =>
+    {
+        int processed = 0;
+        while (processed < UiMaxTagsPerFlush && _uiTagQueue.TryDequeue(out var tag))
+        {
+            UpsertGridRow(tag);
+            processed++;
+        }
+    }));
+}
+// =========================================================
         // EXPORT (mantém pelo GRID como estava)
         // =========================================================
         private void ExportXml()

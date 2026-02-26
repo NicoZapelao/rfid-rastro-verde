@@ -1,7 +1,6 @@
 ﻿using Newtonsoft.Json;
 using RfidRastroVerde.API;
 using System;
-using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -37,11 +36,23 @@ namespace RfidRastroVerde.Api
         {
             if (dto == null) throw new ArgumentNullException(nameof(dto));
 
-            // serializa JSON
             string json = SerializeJson(dto);
 
             using (var content = new StringContent(json, Encoding.UTF8, "application/json"))
-            using (var resp = await _http.PostAsync("rfid/tags", content, ct).ConfigureAwait(false))
+            using (var resp = await _http.PostAsync(_cfg.TagsEndpoint, content, ct).ConfigureAwait(false))
+            {
+                return resp.IsSuccessStatusCode;
+            }
+        }
+
+        public async Task<bool> PostTraySnapshotAsync(TraySnapshotDto dto, CancellationToken ct)
+        {
+            if (dto == null) throw new ArgumentNullException(nameof(dto));
+
+            string json = SerializeJson(dto);
+
+            using (var content = new StringContent(json, Encoding.UTF8, "application/json"))
+            using (var resp = await _http.PostAsync(_cfg.SnapshotsEndpoint, content, ct).ConfigureAwait(false))
             {
                 return resp.IsSuccessStatusCode;
             }

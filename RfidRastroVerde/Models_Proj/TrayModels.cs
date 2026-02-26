@@ -6,8 +6,6 @@ namespace RfidRastroVerde.Models_Proj
     public enum TrayEndReason
     {
         IdleTimeout,
-        TargetReached,
-        HardCap,
         NewTrayScanned,
         ManualStop,
         AppClosing

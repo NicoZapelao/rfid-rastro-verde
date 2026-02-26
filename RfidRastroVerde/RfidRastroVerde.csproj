@@ -75,6 +75,7 @@
     <Compile Include="API\ApiConfig.cs" />
     <Compile Include="API\ApiQueue.cs" />
     <Compile Include="API\TagReadDto.cs" />
+    <Compile Include="API\TraySnapshotDto.cs" />
     <Compile Include="CliRunner.cs" />
     <Compile Include="Driver_Proj\RfidReaderDriver.cs" />
     <Compile Include="Driver_Proj\RfidReaderManager.cs" />
