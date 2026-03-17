@@ -1,85 +1,106 @@
 # 🟢 RfidRastroVerde  
 ### Multi-Reader RFID System (WinForms + CLI)
 
-Sistema profissional de leitura RFID **multi-leitor**, com **deduplicação global**, visualização em tempo real, exportação estruturada de dados e integração opcional via **API REST**.
+Sistema profissional de leitura RFID com **controle por bandeja**, integração com **painel React**, captura de imagem e comunicação via **API local e cloud**.
 
-Projetado para ambientes **industriais, logísticos e de rastreabilidade**, o sistema suporta múltiplos leitores RFID HID conectados simultaneamente, garantindo **ciclos de leitura confiáveis**, controle rigoroso de estado interno e eliminação de leituras fantasmas entre execuções.
+Projetado para ambientes **industriais, logísticos e de rastreabilidade**, o sistema garante ciclos de leitura confiáveis, deduplicação global e operação assistida em tempo real.
 
 ---
 
 ## 🚀 Principais Funcionalidades
 
-- Detecção automática de leitores RFID via USB (HID)
-- Suporte nativo a **1 ou múltiplos leitores simultâneos**
-- **Deduplicação GLOBAL** de tags (independente do leitor ou antena)
-- Identificação completa por leitura:
-  - EPC da tag  
-  - Antena utilizada  
-  - RSSI (força do sinal)  
-  - Leitor responsável (Index + Serial Number)
-- Interface gráfica **WinForms** com atualização em tempo real
-- Modo **CLI** (linha de comando) para automação e uso headless
-- Exportação estruturada de dados (**XML**)
-- Integração opcional com **API REST** (fila assíncrona, não bloqueante)
-- Sistema de log performático (não trava UI)
-- Reset completo e seguro entre ciclos de leitura
+- Leitura RFID multi-leitor (HID)
+- Deduplicação global de tags
+- Sessão por bandeja (ciclo completo de leitura)
+- Interface operacional em **React**
+- Comunicação em tempo real via **API local (bridge)**
+- Captura de imagem da bandeja (workflow integrado)
+- Snapshot estruturado por sessão
+- Fila de envio assíncrona (resiliente)
+- Execução com interface (WinForms) ou modo CLI
+- Exportação de dados (XML)
+- Logs performáticos e seguros
 
 ---
 
 ## 🧠 Arquitetura Geral
 
-O projeto é organizado em camadas bem definidas, facilitando manutenção, expansão e uso em diferentes cenários:
-
 ```text
-RfidRastroVerde/
-├─ Driver_Proj/
-│  ├─ RfidReaderDriver.cs      # Comunicação direta com o leitor RFID (HID/DLL)
-│  └─ RfidReaderManager.cs     # Orquestra multi-leitor + dedupe global + ciclo
-│
-├─ Models_Proj/
-│  ├─ TagRead.cs               # Modelo interno da leitura (evento)
-│  └─ TagRow.cs                # Modelo de visualização no grid (UI)
-│
-├─ Api/                        # (Opcional) Integração REST
-│  ├─ ApiClient.cs             # Cliente HTTP/REST
-│  ├─ ApiQueue.cs              # Fila assíncrona (não bloqueia leitura/UI)
-│  ├─ ApiConfig.cs             # Configurações (BaseUrl, DeviceId, Enabled, etc.)
-│  └─ TagReadDto.cs            # DTO para envio via API
-│
-├─ Cli/
-│  └─ CliRunner.cs             # Execução headless (linha de comando)
-│
-└─ Form1.cs                    # WinForms: UI, grid, logs e exportação
+[ Leitores RFID ]
+        ↓
+[ WinForms (.NET Framework) ]
+  - leitura
+  - sessão por bandeja
+  - snapshot
+  - fila de envio
+  - API local (HttpListener)
+        ↓
+[ API Local - http://localhost:8085 ]
+        ↓
+[ Front React ]
+  - operação
+  - status em tempo real
+  - configurações
+        ↓
+[ API Cloud (opcional) ]
 ```
 
 ---
 
-## 🖥️ Interface Gráfica (WinForms)
+## 🔄 Fluxo Operacional
 
-A aplicação gráfica permite:
+1. Operador posiciona a bandeja
+2. Sistema inicia leitura (automático ou manual)
+3. Tags são associadas à sessão atual
+4. Operador captura imagem da bandeja
+5. Sistema finaliza a sessão
+6. Snapshot é gerado
+7. Snapshot é enviado ou enfileirado
+8. Front acompanha tudo em tempo real
 
-- Abertura automática de todos os leitores RFID conectados
-- Definição de **meta global** de tags únicas
-- Visualização em tempo real das leituras
-- Grid detalhado contendo:
-  - Leitor responsável
-  - Antena
-  - RSSI
-  - Quantidade de leituras por tag
-  - Primeira e última leitura
-- Cópia rápida do EPC com duplo clique
-- Exportação completa para XML
-- Logs detalhados e performáticos
+---
 
-### Fluxo básico (GUI)
+## 🌐 API Local (Bridge)
 
-1. Conectar os leitores RFID via USB  
-2. Abrir a aplicação  
-3. Clicar em **Open**  
-4. Definir a meta de tags únicas  
-5. Clicar em **Start**  
-6. Acompanhar leituras em tempo real  
-7. Exportar XML ou encerrar o ciclo  
+Base:
+http://localhost:8085/api
+
+Endpoints:
+GET /status
+GET /session/current
+POST /session/start
+POST /session/reset
+POST /session/capture-photo
+GET /settings
+PUT /settings
+
+Essa API permite que o front React controle e monitore o sistema WinForms em tempo real.
+
+---
+
+## 🖥️ Interface WinForms
+
+Responsável por:
+
+- Comunicação com leitores RFID
+- Gerenciamento de sessão
+- Deduplicação global
+- Geração de snapshot
+- Envio para API
+- Controle de estado
+
+---
+
+## ⚛️ Front React
+
+Responsável por:
+
+- Painel operacional
+- Exibição de progresso
+- Status da leitura
+- Captura de foto
+- Configuração do sistema
+- Notificações operacionais
 
 ---
 
@@ -148,6 +169,39 @@ Funcionalidades no CLI:
 
 ---
 
+## ⚙️ Configurações
+
+As configurações são persistidas localmente:
+- cliente
+- zona
+- setor
+- meta por bandeja
+- API cloud
+- flags operacionais
+
+---
+
+## 🧩 Requisitos
+
+- Windows
+- .NET Framework 4.7.2
+- Node.js (para front)
+- Leitores RFID compatíveis
+- Visual Studio 2022
+
+---
+
+## ▶️ Como rodar
+
+- WinForms
+  - Compilar e executar no Windows:
+  - bin/x64/Release/RfidRastroVerde.exe
+- Front React
+  - npm install
+  - npm run dev
+
+---
+
 ## 🌐 Integração com API (Opcional)
 
 O sistema suporta envio assíncrono das leituras para uma API REST.
@@ -173,18 +227,6 @@ Como funciona:
 
 ---
 
-## 🧩 Requisitos Técnicos
-
-    Windows
-
-    .NET Framework / .NET compatível com WinForms
-
-    Leitores RFID HID compatíveis com SWHidApi.dll
-
-    Visual Studio 2022 (recomendado)
-
----
-
 ## 📌 Observações Importantes
 
     O sistema sempre reinicia o estado ao iniciar um novo ciclo
@@ -201,12 +243,17 @@ Como funciona:
 
 ## 📈 Status do Projeto
 
-    🟢 Ativo
+    🟢 Leitura RFID funcional
 
-    🔧 Em evolução contínua
+    🟢 Sessão por bandeja funcional
 
-    🧱 Arquitetura preparada para expansão
-    (novos protocolos, banco de dados, dashboards, integrações industriais)
+    🟢 API local (bridge) funcional
+
+    🟢 Front React integrado
+
+    🟡 Captura de imagem em evolução
+
+    🔧 Em validação operacional
 
 ---
 
