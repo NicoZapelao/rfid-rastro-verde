@@ -3,6 +3,7 @@ using RfidRastroVerde.Api;
 using RfidRastroVerde.API;
 using RfidRastroVerde.Driver_Proj;
 using RfidRastroVerde.Models_Proj;
+using RfidRastroVerde.Services;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -44,19 +45,17 @@ namespace RfidRastroVerde
         private readonly Dictionary<string, TagRow> _gridIndex =
             new Dictionary<string, TagRow>(StringComparer.OrdinalIgnoreCase);
 
-        
-
-// -----------------------------
-// UI BATCH: evita travar WinForms com update por tag
-// -----------------------------
-private readonly ConcurrentQueue<TagRead> _uiTagQueue = new ConcurrentQueue<TagRead>();
-private readonly System.Windows.Forms.Timer _uiFlushTimer = new System.Windows.Forms.Timer();
-private const int UiFlushIntervalMs = 250;      // 4x por segundo
-private const int UiMaxTagsPerFlush = 800;      // limite por flush
-private const int ProgressLogEveryTags = 25;    // log de progresso a cada N tags únicas
-private volatile int _lastProgressLogged = 0;
-private const bool VerbosePerTagLog = false;    // ligar só para depuração pesada
-private int _lastTotalUniqueLogged = 0;
+        // -----------------------------
+        // UI BATCH: evita travar WinForms com update por tag
+        // -----------------------------
+        private readonly ConcurrentQueue<TagRead> _uiTagQueue = new ConcurrentQueue<TagRead>();
+        private readonly System.Windows.Forms.Timer _uiFlushTimer = new System.Windows.Forms.Timer();
+        private const int UiFlushIntervalMs = 250;      // 4x por segundo
+        private const int UiMaxTagsPerFlush = 800;      // limite por flush
+        private const int ProgressLogEveryTags = 25;    // log de progresso a cada N tags únicas
+        private volatile int _lastProgressLogged = 0;
+        private const bool VerbosePerTagLog = false;    // ligar só para depuração pesada
+        private int _lastTotalUniqueLogged = 0;
 
         // -----------------------------
         // API
@@ -83,6 +82,13 @@ private int _lastTotalUniqueLogged = 0;
         // scan novo invalida sessões antigas
         private int _traySessionId = 0;
         private TraySession _lastFinishedSession = null;
+        
+        // API front
+        private LocalApiServer _localApi;
+        private SettingsStore _settingsStore;
+        private LocalSettings _settings;
+        private readonly OperationState _operationState = new OperationState();
+        private DateTime? _sessionStartedUtc;
 
         public Form1()
         {
@@ -92,11 +98,10 @@ private int _lastTotalUniqueLogged = 0;
             InitGrid();
             InitExportMenu();
 
-// UI flush (batch)
-_uiFlushTimer.Interval = UiFlushIntervalMs;
-_uiFlushTimer.Tick += (s, e) => FlushUiTagsToGrid();
-_uiFlushTimer.Start();
-
+            // UI flush (batch)
+            _uiFlushTimer.Interval = UiFlushIntervalMs;
+            _uiFlushTimer.Tick += (s, e) => FlushUiTagsToGrid();
+            _uiFlushTimer.Start();
 
             _mgr.Log += DriverLog;
             _mgr.TagUnique += DriverTag;
@@ -122,9 +127,124 @@ _uiFlushTimer.Start();
             gridTags.CellDoubleClick += gridTags_CellDoubleClick;
 
             InitApi();
+            InitializeLocalServices();
 
             // timer de idle (check a cada 250ms)
             _idleTimer = new System.Threading.Timer(_ => IdleTimerTick(), null, 250, 250);
+        }
+
+        // =========================================================
+        // LOCAL API (para dashboard local em Node.js ou outro cliente)
+        // =========================================================
+        private void InitializeLocalServices()
+        {
+            _settingsStore = new SettingsStore();
+            _settings = _settingsStore.Load();
+
+            ApplySettingsToOperationState();
+                _localApi = new LocalApiServer(
+                getStatus: () => BuildStatus(),
+                getCurrentSession: () => BuildCurrentSession(),
+                getSettings: () => _settings,
+                updateSettings: payload => UpdateSettingsFromApi(payload),
+                startSession: bandeja => StartSessionFromApi(bandeja),
+                resetSession: () => ResetSessionFromApi(),
+                capturePhoto: () => CapturePhotoFromApi()
+            );
+
+            _localApi.Start("http://localhost:8085/");  
+        }
+
+        private void ApplySettingsToOperationState()
+        {
+            _operationState.Cliente = _settings.Cliente;
+            _operationState.Zona = _settings.Zona;
+            _operationState.Setor = _settings.Setor;
+            _operationState.Meta = _settings.MetaPorBandeja;
+            _operationState.UltimaAtualizacaoUtc = DateTime.UtcNow;
+        }
+
+        private object BuildStatus()
+        {
+            _operationState.UltimaAtualizacaoUtc = DateTime.UtcNow;
+
+            return new
+            {
+                appStatus = "running",
+                readerStatus = _operationState.LeitorStatus,
+                cameraStatus = _operationState.CameraStatus,
+                apiStatus = _operationState.StatusApi,
+                filaEnvio = _operationState.FilaEnvio,
+                emSessao = _operationState.EmSessao,
+                ultimaAtualizacao = _operationState.UltimaAtualizacaoUtc
+            };
+        }
+
+        private object BuildCurrentSession()
+        {
+            if (_sessionStartedUtc.HasValue)
+                _operationState.TempoSessao = (int)(DateTime.UtcNow - _sessionStartedUtc.Value).TotalSeconds;
+            else 
+                _operationState.TempoSessao = 0;
+
+            _operationState.UltimaAtualizacaoUtc = DateTime.UtcNow;
+            return _operationState;
+        }
+
+        private void UpdateSettingsFromApi(dynamic payload)
+        {
+            _settings.Cliente = payload?.cliente != null ? (string)payload.cliente : _settings.Cliente;
+            _settings.Zona = payload?.zona != null ? (string)payload.zona : _settings.Zona;
+            _settings.Setor = payload?.setor != null ? (string)payload.setor : _settings.Setor;
+            _settings.MetaPorBandeja = payload?.meta != null ? (int)payload.meta : _settings.MetaPorBandeja;
+            _settings.ApiBaseUrl = payload?.apiBaseUrl != null ? (string)payload.apiBaseUrl : _settings.ApiBaseUrl;
+
+            _settingsStore.Save(_settings);
+            ApplySettingsToOperationState();
+        }
+
+        private void StartSessionFromApi(string bandeja)
+        {
+            if (!string.IsNullOrWhiteSpace(bandeja))
+                _operationState.Bandeja = bandeja;
+
+            _operationState.Meta = _settings.MetaPorBandeja;
+            _operationState.Lidas = 0;
+            _operationState.StatusLeitura = "Em andamento";
+            _operationState.StatusApi = "Aguardando envio";
+            _operationState.EmSessao = true;
+            _operationState.FotoCapturada = false;
+            _operationState.NomeFoto = "";
+            _operationState.CameraStatus = "Pronta";
+            _operationState.FilaEnvio = 0;
+            _sessionStartedUtc = DateTime.UtcNow;
+
+            _mgr.StartGlobalFresh(_settings.MetaPorBandeja);
+        }
+
+        private void ResetSessionFromApi()
+        {
+            _operationState.Lidas = 0;
+            _operationState.StatusLeitura = "Aguardando bandeja";
+            _operationState.StatusApi = "Idle";
+            _operationState.EmSessao = false;
+            _operationState.FotoCapturada = false;
+            _operationState.NomeFoto = "";
+            _operationState.CameraStatus = "Pronta";
+            _operationState.FilaEnvio = 0;
+            _sessionStartedUtc = null;
+        }
+
+        private string CapturePhotoFromApi()
+        {
+            var fileName = $"{(_operationState.Bandeja ?? "sem_bandeja")}_{DateTime.Now:yyyyMMdd_HHmmss}.jpg";
+
+            _operationState.FotoCapturada = true;
+            _operationState.NomeFoto = fileName;
+            _operationState.CameraStatus = "Foto capturada";
+            _operationState.UltimaAtualizacaoUtc = DateTime.UtcNow;
+
+            return fileName;
         }
 
         private void InitApi()
@@ -400,7 +520,16 @@ _uiFlushTimer.Start();
             Log("[TRAY] Iniciando leitura... (finaliza por 20s sem tag ou nova bandeja)\r\n");
 
             _mgr.ResetGlobal();
-            _mgr.StartGlobalFresh(165);
+            _mgr.StartGlobalFresh(_settings.MetaPorBandeja);
+
+            _operationState.Bandeja = trayEpc;
+            _operationState.Meta = _settings.MetaPorBandeja;
+            _operationState.Lidas = 0;
+            _operationState.StatusLeitura = "Em andamento";
+            _operationState.StatusApi = "Aguardando envio";
+            _operationState.EmSessao = true;
+            _operationState.FilaEnvio = 0;
+            _sessionStartedUtc = DateTime.UtcNow;
 
             RefreshUiState();
 
@@ -473,9 +602,11 @@ _uiFlushTimer.Start();
         {
             try
             {
-
                 // Monta snapshot completo (1 request por bandeja)
                 var snapshot = TraySnapshotDto.FromSession(session, _apiCfg?.DeviceId);
+                _operationState.StatusLeitura = "Finalizando";
+                _operationState.StatusApi = "Enviando snapshot";
+                _operationState.FilaEnvio = 1;
 
                 // log enxuto (JSON completo pode ser grande e matar desempenho)
                 Log($"[TRAY] Snapshot pronto: Tray={snapshot.TrayEpc} | Itens={snapshot.UniqueItemCount} | Incomplete={snapshot.Incomplete} | Reason={snapshot.EndReason}\r\n");
@@ -492,24 +623,36 @@ _uiFlushTimer.Start();
                 if (_apiQueue != null && _apiCfg != null && _apiCfg.Enabled)
                 {
                     _apiQueue.EnqueueSnapshot(snapshot);
+                    _operationState.StatusApi = "Snapshot enfileirado";
+                    _operationState.FilaEnvio = 1;
                 }
+                else
+                {
+                    _operationState.StatusApi = "API desativada";
+                    _operationState.FilaEnvio = 0;
+                }
+                
+                _operationState.StatusLeitura = "Concluída";
+                _operationState.EmSessao = false;
                 await Task.CompletedTask;
             }
             catch (Exception ex)
             {
+                _operationState.StatusApi = "Falha no envio";
+                _operationState.StatusLeitura = "Concluída com pendência";
+                _operationState.FilaEnvio = 1;
                 Log("[TRAY] Erro ProcessTrayResultAsync: " + ex.Message + "\r\n");
             }
         }
-        
 
-private void SaveSnapshotLocal(string snapshotId, string json)
-{
-    // grava em %AppData%\RfidRastroVerde\snapshots\
-    var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "RfidRastroVerde", "snapshots");
-    Directory.CreateDirectory(dir);
-    var file = Path.Combine(dir, $"{DateTime.Now:yyyyMMdd_HHmmss}_{snapshotId}.json");
-    File.WriteAllText(file, json, Encoding.UTF8);
-}
+        private void SaveSnapshotLocal(string snapshotId, string json)
+        {
+            // grava em %AppData%\RfidRastroVerde\snapshots\
+            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "RfidRastroVerde", "snapshots");
+            Directory.CreateDirectory(dir);
+            var file = Path.Combine(dir, $"{DateTime.Now:yyyyMMdd_HHmmss}_{snapshotId}.json");
+            File.WriteAllText(file, json, Encoding.UTF8);
+        }
 
         // =========================================================
         // DRIVER EVENTS (TagUnique do Manager)
@@ -567,24 +710,28 @@ private void SaveSnapshotLocal(string snapshotId, string json)
             if (!accepted) return;
 
             
-// UI: não atualiza grid/log a cada tag (isso derruba performance). Faz batch no timer.
-_uiTagQueue.Enqueue(tag);
+            // UI: não atualiza grid/log a cada tag (isso derruba performance). Faz batch no timer.
+            _uiTagQueue.Enqueue(tag);
 
-// log detalhado por tag só em modo debug pesado
-if (VerbosePerTagLog)
-    Log("[R" + tag.ReaderIndex + "] " + tag.ToString() + " SN=" + (tag.ReaderSn ?? "") + "\r\n");
+            // log detalhado por tag só em modo debug pesado
+            if (VerbosePerTagLog)
+            Log("[R" + tag.ReaderIndex + "] " + tag.ToString() + " SN=" + (tag.ReaderSn ?? "") + "\r\n");
 
-// log de progresso (a cada N tags únicas na sessão)
-int uniqueNow;
-lock (_trayLock)
-{
-    uniqueNow = _currentSession != null ? _currentSession.UniqueTagsCount : 0;
-}
-if (uniqueNow > 0 && uniqueNow - _lastProgressLogged >= ProgressLogEveryTags)
-{
-    _lastProgressLogged = uniqueNow;
-    Log($"[TRAY] Progresso: {uniqueNow} tags únicas\r\n");
-}
+            // log de progresso (a cada N tags únicas na sessão)
+            int uniqueNow;
+            lock (_trayLock)
+            {
+                uniqueNow = _currentSession != null ? _currentSession.UniqueTagsCount : 0;
+            }
+            _operationState.Lidas = uniqueNow;
+            _operationState.LeitorStatus = "Conectado";
+            _operationState.UltimaAtualizacaoUtc = DateTime.UtcNow;
+
+            if (uniqueNow > 0 && uniqueNow - _lastProgressLogged >= ProgressLogEveryTags)
+            {
+                _lastProgressLogged = uniqueNow;
+                Log($"[TRAY] Progresso: {uniqueNow} tags únicas\r\n");
+            }
 
             // API tag-a-tag (opcional; pode atrapalhar desempenho em rede)
             if (_apiQueue != null && _apiCfg != null && _apiCfg.SendTagEvents)
@@ -600,30 +747,29 @@ if (uniqueNow > 0 && uniqueNow - _lastProgressLogged >= ProgressLogEveryTags)
                     Timestamp = tag.Timestamp
                 });
             }
-        }
+        }  
 
-        
-
-// =========================================================
-// UI BATCH FLUSH
-// =========================================================
-private void FlushUiTagsToGrid()
-{
-    if (_uiTagQueue.IsEmpty) return;
-    if (!IsHandleCreated) return;
-
-    // Faz 1 BeginInvoke por flush (em vez de 1 por tag)
-    BeginInvoke(new Action(() =>
-    {
-        int processed = 0;
-        while (processed < UiMaxTagsPerFlush && _uiTagQueue.TryDequeue(out var tag))
+        // =========================================================
+        // UI BATCH FLUSH
+        // =========================================================
+        private void FlushUiTagsToGrid()
         {
-            UpsertGridRow(tag);
-            processed++;
+            if (_uiTagQueue.IsEmpty) return;
+            if (!IsHandleCreated) return;
+
+            // Faz 1 BeginInvoke por flush (em vez de 1 por tag)
+            BeginInvoke(new Action(() =>
+            {
+                int processed = 0;
+                while (processed < UiMaxTagsPerFlush && _uiTagQueue.TryDequeue(out var tag))
+                {
+                    UpsertGridRow(tag);
+                    processed++;
+                }
+            }));
         }
-    }));
-}
-// =========================================================
+
+        // =========================================================
         // EXPORT (mantém pelo GRID como estava)
         // =========================================================
         private void ExportXml()
@@ -825,6 +971,7 @@ private void FlushUiTagsToGrid()
             try { _logFlushTimer.Stop(); } catch { }
             try { _mgr.Dispose(); } catch { }
             try { _apiQueue?.Dispose(); } catch { }
+            try { _localApi?.Stop(); } catch { }
 
             base.OnFormClosing(e);
         }
